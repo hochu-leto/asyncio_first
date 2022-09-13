@@ -1,19 +1,21 @@
-import asyncio
 import time
 from pprint import pprint
-
 from sqlalchemy import Integer, String, Column, Boolean
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
-
+import asyncio
+import random
+import asyncpg
+from faker import Faker
 import config
-
 import aiohttp
-import requests
 from more_itertools import chunked
 
 CURENCY = 100
+
+engine = create_async_engine(config.PG_DSN_ALC, echo=True)
+Base = declarative_base()
 
 
 async def call_api(url: str, sess: aiohttp.ClientSession()):
@@ -22,24 +24,12 @@ async def call_api(url: str, sess: aiohttp.ClientSession()):
             return await re.json()
 
 
-def main2():
-    curr = requests.get('https://swapi.dev/api/people/').json()
-    pprint(curr)
-    # curr = [item['id'] for item in curr['results']]
-    for i in range(curr['count']):
-        r = requests.get(f'https://swapi.dev/api/people//{i}').json()
-
-        print(f'{r} ')
-
-
 async def main_async():
     async with aiohttp.ClientSession() as s:
         curr = await call_api('https://swapi.dev/api/people/', s)
-        coros = (call_api(f'https://swapi.dev/api/people/{i}', s)
-               for i in range(curr['count']))
-        # coros =[]
-        # for i in range(curr['count']):
-        #     coros.append(call_api(f'https://swapi.dev/api/people/{i}', s))
+        coros = []
+        for i in range(curr['count']):
+            coros.append(call_api(f'https://swapi.dev/api/people/{i}', s))
 
         api = await asyncio.gather(*coros)
         c = 0
@@ -51,9 +41,6 @@ async def main_async():
 
         print(f'{curr["count"]=}  {c=}')
 
-engine = create_async_engine(config.PG_DSN_ALC, echo=True)
-Base = declarative_base()
-
 
 class Person(Base):
 
@@ -62,7 +49,36 @@ class Person(Base):
     id = Column(Integer, primary_key=True)
     name = Column(String(128), index=True)
     admin = Column(Boolean, default=False)
-
+    # id - ID
+    # персонажа
+    # birth_year
+    # eye_color
+    # films - строка
+    # с
+    # названиями
+    # фильмов
+    # через
+    # запятую
+    # gender
+    # hair_color
+    # height
+    # homeworld
+    # mass
+    # name
+    # skin_color
+    # species - строка
+    # с
+    # названиями
+    # типов
+    # через
+    # запятую
+    # starships - строка
+    # с
+    # названиями
+    # кораблей
+    # через
+    # запятую
+    # vehicles
 
 async def get_async_session(
     drop: bool = False, create: bool = False
@@ -80,8 +96,36 @@ async def get_async_session(
 
     return async_session_maker
 
+fake = Faker()
+
+
+def gen_users_data(quantity: int):
+
+    for _ in range(quantity):
+        yield (
+            fake.name(),
+            random.choice([False, True])
+        )
+
+
+async def insert_users(pool: asyncpg.Pool, user_list):
+    query = 'INSERT INTO users (name, admin) VALUES ($1, $2)'
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.executemany(query, user_list)
+
 
 async def main():
+    pool = await asyncpg.create_pool(config.PG_DSN, min_size=20, max_size=20)
+    tasks = []
+    for users_chunk in chunked(gen_users_data(10000), 1000):
+        tasks.append(asyncio.create_task(insert_users(pool, users_chunk)))
+
+    await asyncio.gather(*tasks)
+    await pool.close()
+
+
+async def main_create_table():
     await get_async_session(True, True)
 
 
