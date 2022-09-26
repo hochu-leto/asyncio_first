@@ -1,135 +1,101 @@
 import time
-from pprint import pprint
-from sqlalchemy import Integer, String, Column, Boolean
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
-from sqlalchemy.orm import sessionmaker
+from aiopg.sa import create_engine
+from sqlalchemy import Integer, String, Column, Table, MetaData
 import asyncio
-import random
-import asyncpg
-from faker import Faker
-import config
 import aiohttp
-from more_itertools import chunked
-
-CURENCY = 100
-
-engine = create_async_engine(config.PG_DSN_ALC, echo=True)
-Base = declarative_base()
 
 
-async def call_api(url: str, sess: aiohttp.ClientSession()):
+async def call_api(url: str, sess):
     async with sess.get(url) as re:
         if re.status == 200:
             return await re.json()
 
 
 async def main_async():
-    async with aiohttp.ClientSession() as s:
-        curr = await call_api('https://swapi.dev/api/people/', s)
-        coros = []
-        for i in range(curr['count']):
-            coros.append(call_api(f'https://swapi.dev/api/people/{i}', s))
-
-        api = await asyncio.gather(*coros)
-        c = 0
-        for r in api:
-
-            if r and 'name' in r.keys():
-                c += 1
-                print(f'{r["name"]}')
-
-        print(f'{curr["count"]=}  {c=}')
+    engine = await create_engine(
+        user="app", database="app", host="127.0.0.1", port='5431', password="secret"
+    )
+    async with engine:
+        async with engine.acquire() as conn:
+            await create_tables(conn)
+            async with aiohttp.ClientSession() as s:
+                curr = await call_api('https://swapi.dev/api/people/', s)
+                for i in range(curr['count']):
+                    person = call_api(f'https://swapi.dev/api/people/{i}', s)
+                    await fill_data(conn, await person, s, i)
 
 
-class Person(Base):
+star_wars = Table('star_wars',
+                  MetaData(),
+                  Column('id', Integer, primary_key=True),
+                  Column('birth_year', String(8), index=True),
+                  Column('eye_color', String(128), index=True),
+                  Column('films', String, index=True),  # - строка с названиями фильмов через запятую
+                  Column('gender', String(128), index=True),
+                  Column('hair_color', String, index=True),
+                  Column('height', String(128), index=True),
+                  Column('homeworld', String, index=True),
+                  Column('mass', String(128), index=True),
+                  Column('name', String, index=True),
+                  Column('skin_color', String(128), index=True),
+                  Column('species', String, index=True),  # - строка с названиями типов через запятую
+                  Column('starships', String, index=True),  # - строка с названиями кораблей через запятую
+                  Column('vehicles', String, index=True))
 
-    __tablename__ = 'star_wars'
 
-    id = Column(Integer, primary_key=True)
-    name = Column(String(128), index=True)
-    admin = Column(Boolean, default=False)
-    # id - ID
-    # персонажа
-    # birth_year
-    # eye_color
-    # films - строка
-    # с
-    # названиями
-    # фильмов
-    # через
-    # запятую
-    # gender
-    # hair_color
-    # height
-    # homeworld
-    # mass
-    # name
-    # skin_color
-    # species - строка
-    # с
-    # названиями
-    # типов
-    # через
-    # запятую
-    # starships - строка
-    # с
-    # названиями
-    # кораблей
-    # через
-    # запятую
-    # vehicles
-
-async def get_async_session(
-    drop: bool = False, create: bool = False
-):
-
-    async with engine.begin() as conn:
-        if drop:
-            await conn.run_sync(Base.metadata.drop_all)
-        if create:
-            print(1)
-            await conn.run_sync(Base.metadata.create_all)
-    async_session_maker = sessionmaker(
-        engine, expire_on_commit=False, class_=AsyncSession
+async def create_tables(conn):
+    await conn.execute("DROP TABLE IF EXISTS star_wars")
+    await conn.execute(
+        """CREATE TABLE star_wars (
+                   id serial PRIMARY KEY,
+                   birth_year varchar(8),
+                  eye_color varchar(128),
+                  films varchar(255),
+                  gender varchar(128),
+                  hair_color varchar(255),
+                  height varchar(128), 
+                  homeworld varchar(255),
+                  mass varchar(128),
+                  name varchar(255),
+                  skin_color varchar(128),
+                  species varchar(255),
+                  starships varchar(255),
+                  vehicles varchar(255))"""
     )
 
-    return async_session_maker
 
-fake = Faker()
-
-
-def gen_users_data(quantity: int):
-
-    for _ in range(quantity):
-        yield (
-            fake.name(),
-            random.choice([False, True])
-        )
-
-
-async def insert_users(pool: asyncpg.Pool, user_list):
-    query = 'INSERT INTO users (name, admin) VALUES ($1, $2)'
-    async with pool.acquire() as conn:
-        async with conn.transaction():
-            await conn.executemany(query, user_list)
-
-
-async def main():
-    pool = await asyncpg.create_pool(config.PG_DSN, min_size=20, max_size=20)
-    tasks = []
-    for users_chunk in chunked(gen_users_data(10000), 1000):
-        tasks.append(asyncio.create_task(insert_users(pool, users_chunk)))
-
-    await asyncio.gather(*tasks)
-    await pool.close()
-
-
-async def main_create_table():
-    await get_async_session(True, True)
+async def fill_data(conn, person, session, id):
+    async with conn.begin():
+        if person:
+            spec = ''
+            for p in person['species']:
+                spec += (await call_api(p, session))['name'] + ", "
+            ship = ''
+            for p in person['starships']:
+                ship += (await call_api(p, session))['name'] + ", "
+            film = ''
+            for p in person['films']:
+                film += (await call_api(p, session))['title'] + ', '
+            await conn.execute(
+                star_wars.insert().values(
+                    id=id,
+                    birth_year=person['birth_year'],
+                    starships=ship,
+                    mass=person['mass'],
+                    eye_color=person['eye_color'],
+                    films=film,
+                    gender=person['gender'],
+                    hair_color=person['hair_color'],
+                    height=person['height'],
+                    homeworld=person['homeworld'],
+                    name=person['name'],
+                    skin_color=person['skin_color'],
+                    species=spec,
+                    vehicles=person['vehicles']
+                ))
 
 
 if __name__ == '__main__':
     st = time.time()
-    asyncio.run(main_async())
+    api = asyncio.run(main_async())
     print(time.time() - st)

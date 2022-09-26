@@ -12,7 +12,7 @@ services:
       POSTGRES_USER: app
       POSTGRES_DB: app
     ports:
-      - "5432:5432"
+      - "5431:5432"
     networks:
       net1:
         aliases:
